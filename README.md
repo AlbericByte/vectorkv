@@ -1,13 +1,10 @@
-# Apache Template
+## 📝 About This Project
 
-[Apache Template](https://template.staged.apache.org/)
+I started this project during a transition period between jobs. While exploring new opportunities, I spent time studying RocksDB and other LSM-tree–based storage engines to deepen my understanding of database internals.
 
-This repository provides a website template for a site using [ASF-Pelican](https://infra.apache.org/asf-pelican.html). That page, and pages linked from it, provide extensive documentation on how to deploy the template.
+The initial goal was to implement a distributed key-value database in Rust. As the project evolves, and based on my study of existing vector databases, the plan is to further extend it into a Rust-based vector database in a later stage.
 
-Pelican build site infrastructure is [here](https://github.com/apache/infrastructure-pelican). (WIP)
-
-If you use this template for your project website and provide a [logo](https://www.apache.org/logos/),
-your project should pass the "[Apache Project Website Checks](https://whimsy.apache.org/site/)".
+This project builds upon several years of accumulated learning in system programming, storage engines, and performance optimization. It is not intended to fully replicate mature systems like RocksDB, but rather to implement core components step by step, explore design trade-offs, and share the learning process with the open-source community.
 
 ## How to use this template
 
