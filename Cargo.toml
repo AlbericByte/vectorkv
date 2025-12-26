@@ -12,3 +12,7 @@ tokio = { version = "1.41", features = ["full"] }      # 异步 runtime
 bytes = "1.4"                                        # buffer
 async-trait = "0.1"
 crc32c = "0.6.8"
+config = "0.15.19"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
