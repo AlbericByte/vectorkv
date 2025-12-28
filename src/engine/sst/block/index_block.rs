@@ -1,7 +1,7 @@
 use crate::DBError;
 use crate::engine::sst::block::{BlockBuilder, DataBlock};
 use crate::engine::sst::format::BlockHandle;
-use crate::engine::sst::iterator::DataBlockIter;
+use crate::engine::sst::iterator::{DataBlockIter, InternalIterator};
 
 /// 读 SST 时的 IndexBlock
 pub struct IndexBlock {
@@ -20,22 +20,10 @@ impl IndexBlock {
     /// 约定：index entry key 是 data block 的 largest_key，
     /// 所以要找 "第一个 >= target_key 的 entry"
     pub fn find_data_block(&self, target_key: &[u8]) -> Result<Option<BlockHandle>, DBError> {
-        // 关键：这里不能用 DataBlock::get（等值），
-        // 必须做 "lower_bound"（seek 到 >= target_key 的第一条 index entry）。
-        //
-        // 工业级做法：用 BlockIter.seek，然后读当前 entry。
-        //
-        // 如果你还没实现 BlockIter.seek，
-        // 这里给一个“最小可用”的降级方案：扫描 restart array 做 lower_bound。
-        //
-        // ✅ 推荐：实现 DataBlock::lower_bound(...)，这里就一行调用。
-        //
-        let v = self
-            .block
-            .lower_bound_value(target_key)  // <-- 你需要实现这个（下面给实现）
-            .ok_or_else(|| DBError::Corruption("index lower_bound failed".into()))?;
-
-        Ok(Some(BlockHandle::decode_from_bytes(&v)?))
+        let mut iter = DataBlockIter::new(&self.block);
+        <DataBlockIter as InternalIterator>::seek(&mut iter, target_key);
+        if !iter.valid() { return Ok(None); }
+        Ok(Some(BlockHandle::decode_from_bytes(&iter.value())?))
     }
 
     pub fn raw_block(&self) -> &DataBlock {

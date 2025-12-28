@@ -45,7 +45,7 @@ impl MemTableSet {
 
     // ========== 写入路径 ==========
 
-    pub fn apply(&self, batch: WriteBatch, base_seq: SequenceNumber) -> Result<(), DBError> {
+    pub fn apply(&self, base_seq: SequenceNumber, batch: WriteBatch) -> Result<(), DBError> {
         let mut seq = base_seq;
 
         for entry in batch.entries {

@@ -188,11 +188,12 @@ pub struct SkipListMemTable {
     pub(crate) skiplist: SkipList<InternalKey, Vec<u8>,fn(&InternalKey, &InternalKey) -> std::cmp::Ordering,fn(&InternalKey, &InternalKey) -> bool>,
     memory_usage: AtomicUsize,
     immutable: AtomicBool,
+    frontier_seq: u64,
 }
 
 
 impl SkipListMemTable {
-    pub fn new() -> Self {
+    pub fn new(seq: u64) -> Self {
         fn is_visible(a: &InternalKey, b: &InternalKey
         ) -> bool {
             a.user_key == b.user_key && a.seq <= b.seq && a.value_type!=ValueType::Delete
@@ -205,6 +206,7 @@ impl SkipListMemTable {
             skiplist,
             memory_usage:AtomicUsize::new(0),
             immutable:AtomicBool::new(false),
+            frontier_seq: seq,
         }
     }
 }
@@ -233,6 +235,9 @@ impl MemTable for SkipListMemTable
     }
 
     fn get(&self, seq:SequenceNumber, key: &[u8]) -> Option<Vec<u8>> {
+        if seq < self.frontier_seq {
+            return None;
+        }
         let temp_key = InternalKey::from_seq_slice(seq, key); // 根据实际 InternalKey 定义
         self.skiplist.search(&temp_key).cloned()
     }
