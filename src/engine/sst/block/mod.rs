@@ -1,6 +1,5 @@
 pub mod block;
 mod restart;
-mod coding;
 mod data_block;
 mod filter_block;
 mod filter_policy;
@@ -9,13 +8,16 @@ mod shard_cache;
 mod lru_cache;
 mod index_block;
 mod metaindex_block;
+mod BlockBasedTableBuilder;
+mod table_properties;
+mod lsm_codec;
 
-pub use block::{BlockBuilder,BLOCK_TRAILER_SIZE};
-pub use coding::{get_varint32, get_varint64, put_varint32};
+pub use block::{BlockBuilder, BLOCK_TRAILER_SIZE};
+pub use lsm_codec::{get_varint32, get_varint64, put_varint32, put_varint64};
 pub use restart::parse_restarts;
 pub use data_block::{DataBlock,BlockTrait,BlockType};
 pub use filter_block::FilterBlock;
-pub use filter_policy::FilterPolicy;
+pub use filter_policy::{FilterPolicy, BloomFilterBuilder};
 pub use lru_cache::{LruList, Node};
 pub use block_cache::{BlockCache, BlockCacheKey};
 pub use shard_cache::Shard;

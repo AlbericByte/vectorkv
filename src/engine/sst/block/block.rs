@@ -73,4 +73,15 @@ impl BlockBuilder {
         self.counter = 0;
         self.last_key.clear();
     }
+
+    pub fn current_size_estimate(&self) -> usize {
+        self.buf.len() + self.restarts.len() * 4
+    }
+
+    pub fn encoded_block_size(&self) -> usize {
+        let body = self.buf.len();
+        let restarts = self.restarts.len() * 4;
+        let footer = 4 + 4; // restart_count(u32) + first_restart(u32)
+        body + restarts + footer
+    }
 }
