@@ -16,6 +16,10 @@ pub struct BackgroundWorker {
 }
 
 impl BackgroundWorker {
+    pub fn new() -> Self{
+        Self::start()
+    }
+    
     pub fn start() -> Self {
         let inner = Arc::new(Inner {
             queue: Mutex::new(VecDeque::new()),

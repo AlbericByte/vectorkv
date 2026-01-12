@@ -1,5 +1,4 @@
-pub mod mem;
-
+pub(crate) mod mem;
 pub(crate) mod wal;
 pub(crate) mod version;
 pub(crate) mod background;

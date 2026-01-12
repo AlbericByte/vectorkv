@@ -11,3 +11,4 @@ pub mod skiplist_test;
 
 pub use memtable::{mvcc_comparator,raw_mvcc_compare,MemTable,SkipListMemTable,ValueType,InternalKey};
 pub use memtable_set::{MemTableSet};
+pub use storage::Storage;

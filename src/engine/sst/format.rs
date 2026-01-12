@@ -164,3 +164,19 @@ pub fn decode_fixed32(src: &[u8]) -> u32 {
     let bytes: [u8; 4] = src.try_into().unwrap();
     u32::from_le_bytes(bytes)
 }
+
+pub fn hash64(data: &[u8], seed: u64) -> u64 {
+    let mut h = seed ^ (data.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        h ^= h >> 33;
+    }
+    // final avalanche
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xC4CE_B9FE_1A85_EC53);
+    h ^= h >> 33;
+    h
+}

@@ -1,4 +1,4 @@
-use crc32c::crc32c;
+use crc32fast::Hasher;
 use crate::engine::wal::{WriteBatch, WriteBatchEntry};
 use crate::engine::mem::{ColumnFamilyId, SequenceNumber};
 use crate::error::DBError; // 你已有的 error
@@ -29,11 +29,10 @@ impl RecordType {
 
 /// RocksDB/LevelDB: CRC over (type_byte || payload)
 pub fn record_crc32c(typ: RecordType, payload: &[u8]) -> u32 {
-    // 小优化：避免频繁分配，可改成 stack buffer + streaming crc
-    let mut tmp = Vec::with_capacity(1 + payload.len());
-    tmp.push(typ as u8);
-    tmp.extend_from_slice(payload);
-    crc32c(&tmp)
+    let mut hasher = Hasher::new();
+    hasher.update(&[typ as u8]);
+    hasher.update(payload);
+    hasher.finalize()
 }
 
 
@@ -173,4 +172,15 @@ pub(crate) fn read_string(buf: &[u8], pos: &mut usize) -> Result<String, DBError
     Ok(s)
 }
 
+pub fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
+/// RocksDB/LevelDB 兼容的 CRC32 mask
+pub fn crc32_mask(crc: u32) -> u32 {
+    // 右移 15 位 + 左移 17 位，再与原 crc 做 XOR
+    ((crc >> 15) | (crc << 17)).wrapping_add(0xA282_EAD8)
+}
 

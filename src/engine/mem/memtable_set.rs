@@ -24,11 +24,11 @@ pub struct MemTableSet {
 
 impl MemTableSet {
     /// 创建一个新的 MemTableSet（DB 启动时）
-    pub fn new(cfs: &[ColumnFamilyId]) -> Self {
+    pub fn new(seq: u64, cfs: &[ColumnFamilyId]) -> Self {
 
         let mut map = HashMap::new();
         for cf in cfs{
-            let active = Arc::new(SkipListMemTable::new());
+            let active = Arc::new(SkipListMemTable::new(seq));
             map.insert(
                 *cf,
                 CfMemTables {
@@ -113,7 +113,6 @@ impl MemTableSet {
                 return Some(v);
             }
         }
-
         None
     }
 
