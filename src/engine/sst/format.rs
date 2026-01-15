@@ -1,15 +1,6 @@
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
 use crate::DBError;
-
-// src/sst/format.rs
-pub const BLOCK_TRAILER_SIZE: usize = 5;
-pub const NO_COMPRESSION: u8 = 0;
-
-// RocksDB/LevelDB magic（不同实现可能不同；你可以先用固定 magic）
-// 这里用 LevelDB 的 classic magic 示例；你也可以换成 RocksDB 的。
-pub const TABLE_MAGIC: u64 = 0xdb4775248b80fb57;
+use crate::util::TABLE_MAGIC;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BlockHandle {

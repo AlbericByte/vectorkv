@@ -26,6 +26,10 @@ impl BlockBuilder {
         }
     }
 
+    pub fn counter(&self) -> usize {
+        self.counter
+    }
+
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }

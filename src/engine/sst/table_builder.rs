@@ -1,102 +1,216 @@
 // src/sst/table_builder.rs
 use std::io::{self, Write};
-
-use crate::engine::sst::block::BlockBuilder;
-use crate::engine::sst::format::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, NO_COMPRESSION};
+use std::sync::atomic::Ordering;
+use crate::DBError;
+use crate::engine::sst::block::{BlockBuilder, FilterBlockBuilder, MetaIndexBlockBuilder, TableProperties};
+use crate::engine::sst::format::{BlockHandle, Footer};
 
 pub struct TableBuilder<W: Write> {
-    w: W,
+    dst: W,
     offset: u64,
+    block_size: usize,
+    // Blocks
+    data_block: BlockBuilder,   // Current data block
+    index_block: BlockBuilder,  // Index block
+    metaindex_block: MetaIndexBlockBuilder,
+    // Optional filter block
+    filter_block: Option<FilterBlockBuilder>,
 
-    data_block: BlockBuilder,
-    index_block: BlockBuilder,
-
+    // Pending index for delayed writing
     pending_index_handle: Option<BlockHandle>,
-    pending_index_key: Vec<u8>,
+    pending_index_key:  Option<Vec<u8>>,
+
+    last_added_key: Vec<u8>,
+    last_data_handle: Option<BlockHandle>,
+
+    props: TableProperties,
 }
 
 impl<W: Write> TableBuilder<W> {
-    pub fn new(w: W) -> Self {
+    pub fn new(
+        dst: W,
+        block_size: usize,
+        restart_interval: usize,
+        filter_block: Option<FilterBlockBuilder>,
+    ) -> Self {
         Self {
-            w,
+            dst,
             offset: 0,
-            data_block: BlockBuilder::new(16),
-            index_block: BlockBuilder::new(1),
+            block_size,
+            data_block: BlockBuilder::new(restart_interval),
+            index_block: BlockBuilder::new(1),       // index block restart_interval=1
+            metaindex_block: MetaIndexBlockBuilder::new(1),   // metaindex restart_interval=1
+            filter_block,
             pending_index_handle: None,
-            pending_index_key: Vec::new(),
+            pending_index_key: None,
+            last_added_key: Vec::new(),
+            last_data_handle: None,
+            props: TableProperties::default(),
         }
     }
 
-    pub fn add(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
-        // 如果上一个 data block 已经写出，需要把它的 handle 写入 index
-        if let Some(h) = self.pending_index_handle.take() {
-            // index entry：key -> handle_bytes
-            let mut hb = Vec::new();
-            h.encode_to(&mut hb);
-            self.index_block.add(&self.pending_index_key, &hb);
+    /// Add a key-value pair
+    pub fn add(&mut self, key: &[u8], value: &[u8]) -> Result<(), DBError> {
+        // Check key order
+        if !self.last_added_key.is_empty() && key <= self.last_added_key.as_slice() {
+            return Err(DBError::Other("Keys must be added in order".into()));
         }
 
+        // Add key to filter block if present
+        if let Some(filter) = &mut self.filter_block {
+            filter.add_key(key);
+        }
+
+        // Add to data block
         self.data_block.add(key, value);
 
-        // 简化：达到一定大小就 flush block
-        if self.data_block.finish().len() > 16 * 1024 {
-            // 注意：finish() 会 take buffer；所以这里不要这样写
-            // 实际应先 check estimated size。这里给你正确写法：
-            // 见下方 flush_data_block() 用法
+        // Flush if block size exceeded
+        if self.data_block.current_size_estimate() >= self.block_size {
+            self.flush_data_block(key)?;
         }
 
-        // 先用简单策略：每次 add 都不 flush，让调用者决定
+        self.last_added_key.clear();
+        self.last_added_key.extend_from_slice(key);
+
         Ok(())
     }
 
-    pub fn flush_data_block(&mut self, last_key_in_block: &[u8]) -> io::Result<()> {
+    /// Flush current data block to file
+    fn flush_data_block(&mut self, next_key: &[u8]) -> Result<(), DBError> {
         if self.data_block.is_empty() {
             return Ok(());
         }
-        let raw = self.data_block.finish();
-        let handle = self.write_block(&raw)?;
-        self.data_block.reset();
 
-        self.pending_index_handle = Some(handle);
-        self.pending_index_key.clear();
-        self.pending_index_key.extend_from_slice(last_key_in_block);
+        // Finish block bytes
+        let block_bytes = self.data_block.finish();
+        let block_len = block_bytes.len() as u64;
+
+        // Write to dst
+        self.dst.write_all(&block_bytes)?;
+        let handle = BlockHandle {
+            offset: self.offset,
+            size: block_len,
+        };
+        self.offset += block_len;
+
+        // Update TableProperties
+        self.props.num_entries.fetch_add(self.data_block.counter() as u64, Ordering::Relaxed);
+
+        // If there is a pending index, write it now
+        if let Some(pending_key) = self.pending_index_key.take() {
+            let mut handle_encoded = Vec::new();
+            put_varint64(&mut handle_encoded, handle.offset);
+            put_varint64(&mut handle_encoded, handle.size);
+            self.index_block.add(&pending_key, &handle_encoded);
+        }
+
+        // Set pending_index_key for next flush
+        self.pending_index_key = Some(next_key.to_vec());
+        self.last_data_handle = Some(handle);
+
+        self.data_block.reset();
         Ok(())
     }
 
-    pub fn finish(mut self) -> io::Result<()> {
-        // flush last data block: 调用方需要提供最后一个 key（或者你内部缓存 last_key）
-        // 这里假设你在外面会在 finish 前 flush_data_block(last_key) 一次
-        if let Some(h) = self.pending_index_handle.take() {
-            let mut hb = Vec::new();
-            h.encode_to(&mut hb);
-            self.index_block.add(&self.pending_index_key, &hb);
+    /// Finish the SSTable
+    pub fn finish(mut self) -> Result<(), DBError> {
+        // 1️⃣ flush data block
+        if !self.data_block.is_empty() {
+            let data_bytes = self.data_block.finish();
+            let offset = self.offset;
+            let len = data_bytes.len() as u64;
+            self.dst.write_all(&data_bytes)?;
+            self.last_data_handle = Some(BlockHandle { offset, size: len });
+            self.offset += len;
         }
 
-        let index_raw = self.index_block.finish();
-        let index_handle = self.write_block(&index_raw)?;
+        // 2️⃣ add the last index entry
+        if let Some(pending_key) = self.pending_index_key.take() {
+            let handle = self.last_data_handle
+                .expect("pending_index_key exists but no last_data_handle");
+            let mut handle_encoded = Vec::new();
+            put_varint64(&mut handle_encoded, handle.offset);
+            put_varint64(&mut handle_encoded, handle.size);
+            self.index_block.add(&pending_key, &handle_encoded);
+        }
 
+        // 3️⃣ flush filter block (可选)
+        let filter_handle = if let Some(filter) = &mut self.filter_block {
+            let filter_bytes = filter.finish();
+            let offset = self.offset;
+            let len = filter_bytes.len() as u64;
+            self.dst.write_all(&filter_bytes)?;
+            self.offset += len;
+            Some(BlockHandle { offset, size: len })
+        } else {
+            None
+        };
+
+        // 4️⃣ flush TableProperties block
+        let props_handle = self.props.write_block(&mut self.dst, self.offset)?;
+        self.offset += props_handle.size;
+
+        // 5️⃣ 写 metaindex block
+        if let Some(fh) = filter_handle {
+            self.metaindex_block.add_filter_block("bloomfilter", fh);
+        }
+        self.metaindex_block.add_properties_block(props_handle);
+
+        // 6️⃣ flush metaindex block
+        let meta_bytes = self.metaindex_block.finish();
+        let meta_offset = self.offset;
+        let meta_len = meta_bytes.len() as u64;
+        self.dst.write_all(&meta_bytes)?;
+        self.offset += meta_len;
+        let meta_handle = BlockHandle {
+            offset: meta_offset,
+            size: meta_len,
+        };
+
+        // 7️⃣ flush index block
+        let index_bytes = self.index_block.finish();
+        let index_offset = self.offset;
+        let index_len = index_bytes.len() as u64;
+        self.dst.write_all(&index_bytes)?;
+        self.offset += index_len;
+        let index_handle = BlockHandle {
+            offset: index_offset,
+            size: index_len,
+        };
+
+        // 8️⃣ write footer
         let footer = Footer {
-            metaindex_handle: BlockHandle { offset: 0, size: 0 },
+            metaindex_handle: meta_handle,
             index_handle,
         };
         let footer_bytes = footer.encode();
-        self.w.write_all(&footer_bytes)?;
+        self.dst.write_all(&footer_bytes)?;
         self.offset += footer_bytes.len() as u64;
 
         Ok(())
     }
 
-    fn write_block(&mut self, raw: &[u8]) -> io::Result<BlockHandle> {
-        let handle = BlockHandle {
-            offset: self.offset,
-            size: raw.len() as u64,
-        };
-
-        self.w.write_all(raw)?;
-        // trailer: compression + crc (先写 0，后续加 crc32c)
-        self.w.write_all(&[NO_COMPRESSION])?;
-        self.w.write_all(&0u32.to_le_bytes())?;
-        self.offset += raw.len() as u64 + BLOCK_TRAILER_SIZE as u64;
-        Ok(handle)
+    pub fn reset(&mut self) {
+        self.data_block.reset();
+        self.index_block.reset();
+        self.metaindex_block.reset();
+        if let Some(filter) = &mut self.filter_block {
+            filter.reset();
+        }
+        self.pending_index_handle = None;
+        self.pending_index_key = None;
+        self.last_added_key.clear();
+        self.last_data_handle = None;
+        self.props = TableProperties::default();
+        self.offset = 0;
     }
+}
+
+/// Helper: put u64 as varint (simplified)
+fn put_varint64(buf: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        buf.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    buf.push(v as u8);
 }

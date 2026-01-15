@@ -1,6 +1,6 @@
 pub mod engine;
 pub mod network;
-pub mod db;
+pub mod util;
 pub mod error;
 
 pub use crate::db::db_trait::{DB};

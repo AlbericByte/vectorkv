@@ -125,4 +125,8 @@ impl MetaIndexBlockBuilder {
     pub fn is_empty(&self) -> bool {
         self.builder.is_empty()
     }
+
+    pub fn reset(&mut self) {
+        self.builder.reset();
+    }
 }

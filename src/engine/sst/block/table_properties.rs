@@ -1,9 +1,10 @@
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use crate::DBError;
 use crate::engine::sst::block::put_varint64;
 use crate::engine::sst::block::lsm_codec::LsmCodec;
+use crate::engine::sst::BlockHandle;
 
 pub type ColumnFamilyId = u32;
 pub type SequenceNumber = u64;
@@ -121,5 +122,26 @@ impl TableProperties {
     /// 读取时判断 snapshot 可见性（你后面 MVCC 读 SST 需要用）
     pub fn seq_visible(&self, snapshot: SequenceNumber) -> bool {
         self.max_sequence.load(Ordering::SeqCst) <= snapshot
+    }
+
+    pub fn write_block<W: Write + Seek>(
+        &self,
+        dst: &mut W,
+        offset: u64,
+    ) -> Result<BlockHandle, DBError> {
+        // 1️⃣ 编码 TableProperties
+        let mut buf = Vec::new();
+        self.encode_to(&mut buf);  // 现有方法，把最新统计信息编码到字节
+
+        // 2️⃣ 写入 dst
+        dst.write_all(&buf)?;
+
+        // 3️⃣ 返回 BlockHandle
+        let handle = BlockHandle {
+            offset,
+            size: buf.len() as u64,
+        };
+
+        Ok(handle)
     }
 }
