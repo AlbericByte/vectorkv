@@ -1,11 +1,25 @@
 use std::io;
+use config::ConfigError;
 
 #[derive(Debug)]
 pub enum DBError {
-    Io(String),
+    Io(io::Error),
+    Config(ConfigError),
     Corruption(String),
     InvalidArgument(String),
     UnknownColumnFamily(String),
     NotFound(String),
     Other(String),
+}
+
+impl From<std::io::Error> for DBError {
+    fn from(e: std::io::Error) -> Self {
+        DBError::Io(e)
+    }
+}
+
+impl From<config::ConfigError> for DBError {
+    fn from(e: config::ConfigError) -> Self {
+        DBError::Config(e)
+    }
 }

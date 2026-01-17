@@ -81,7 +81,7 @@ impl MemTableSet {
     }
 
     /// 冻结当前 memtable（切换 active → immutable）
-    pub fn freeze_active(&mut self, cf: ColumnFamilyId, new_seq: SequenceNumber) -> Result<(), DBError>{
+    pub fn freeze_active(&mut self, cf: ColumnFamilyId, new_seq: SequenceNumber) -> Result<VecDeque<Arc<dyn MemTable>>, DBError>{
         let cf_tables = self.cfs.get_mut(&cf)
             .ok_or(DBError::UnknownColumnFamily(format!(
                 "Unknown column family id: {}",
@@ -91,7 +91,7 @@ impl MemTableSet {
             Arc::new(SkipListMemTable::new(new_seq)),
         );
         cf_tables.immutables.push_back(old);
-        Ok(())
+        Ok(cf_tables.immutables)
     }
 
     // ========== 读取路径 ==========

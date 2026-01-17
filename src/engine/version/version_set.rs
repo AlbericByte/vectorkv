@@ -7,7 +7,7 @@ use crate::engine::mem::ColumnFamilyId;
 use crate::engine::sst::iterator::{DBIterator, EmptyIterator};
 use crate::engine::sst::TableCache;
 use crate::engine::version::{read_current, FileMetaData, ManifestReader, ManifestWriter, Version, VersionEdit};
-use crate::util::{FIRST_MANIFEST, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
+use crate::util::{DbConfig, FIRST_MANIFEST, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
 use crate::util::constants::{SYSTEM_COLUMN_FAMILY_ID, USER_COLUMN_FAMILY_ID};
 
 pub struct VersionSet {
@@ -45,11 +45,11 @@ pub struct VersionBuilder {
 
 impl VersionSet {
     pub fn load(
-        db_path: &str,
+        db_config: &DbConfig,
         table_cache: Arc<TableCache>,
     ) -> Result<Self, DBError> {
         // Path to the `CURRENT` pointer file
-        let manifest_file:Option<String> = read_current(Path::new(db_path))
+        let manifest_file:Option<String> = read_current(&db_config.db_path)
             .ok()
             .and_then(|s| {
                 let t = s.trim();
@@ -58,7 +58,9 @@ impl VersionSet {
         // If no valid manifest pointer is found, treat this as the first startup
         if manifest_file.is_none() {
             let manifest_name = FIRST_MANIFEST;
-            let manifest_path = format!("{}/{}", db_path, manifest_name);
+            let manifest_path = db_config
+                .manifest_dir
+                .join(manifest_name);
 
             // 创建 manifest
             let manifest = ManifestWriter::create_new(&manifest_path)?;
@@ -100,7 +102,7 @@ impl VersionSet {
 
         // Non-first startup: replay the manifest to rebuild CF versions and sequence/file numbers
         let manifest_name = manifest_file.unwrap();
-        let manifest_path = Path::new(db_path).join(manifest_name);
+        let manifest_path = db_config.manifest_dir.join(manifest_name);
         let mut manifest = ManifestReader::open(manifest_path)?;
 
         // Prepare an empty version state for replay
@@ -163,31 +165,31 @@ impl VersionSet {
     /// Allocate a new SST file number.
     /// This method does not clone any data; it simply increments the internal counter.
     pub fn new_file_number(&mut self) -> u64 {
-        self.next_file_number.fetch_add(1, Ordering::SeqCst) + 1
+        self.next_file_number.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// Return the next global monotonically increasing sequence number.
     /// This does NOT persist anything to disk; persistence is handled via `VersionEdit` in MANIFEST.
     #[inline]
     pub fn next_sequence(&self) -> u64 {
-        self.current_sequence.fetch_add(1, Ordering::SeqCst) +1
+        self.current_sequence.fetch_add(1, Ordering::Relaxed) +1
     }
 
     #[inline]
     pub fn current_sequence(&self) -> u64 {
-        self.current_sequence.load(Ordering::SeqCst)
+        self.current_sequence.load(Ordering::Relaxed)
     }
 
     #[inline]
     pub fn latest_sst_snapshot(&self) -> u64 {
-        self.last_sequence.load(Ordering::SeqCst)
+        self.last_sequence.load(Ordering::Acquire)
     }
 
     /// Allocate a sequence number for a write batch.
     /// Returns the first sequence of the batch, and advances the global sequence counter
     /// by `batch_size` entries.
     pub fn allocate_sequence(&mut self, batch_size: u64) -> u64 {
-        self.current_sequence.fetch_add(batch_size, Ordering::SeqCst) + batch_size
+        self.current_sequence.fetch_add(batch_size, Ordering::Relaxed) + batch_size
     }
 
     /// Log the version edit to the manifest file and apply it to the in-memory Version.

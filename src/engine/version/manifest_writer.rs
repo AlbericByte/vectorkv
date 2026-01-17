@@ -15,14 +15,14 @@ pub struct ManifestWriter {
 
 impl ManifestWriter {
     /// Create a brand new manifest file on first DB startup.
-    pub fn create_new(path: &str) -> Result<Self, DBError> {
+    pub fn create_new(path: &PathBuf) -> Result<Self, DBError> {
         use std::fs::{File, OpenOptions};
         use std::io::Write;
         use std::path::Path;
 
         // Ensure the directory exists
-        if let Some(dir) = Path::new(path).parent() {
-            std::fs::create_dir_all(dir).map_err(|e| DBError::Io(e.to_string()))?;
+        if let Some(dir) = path.as_path().parent() {
+            std::fs::create_dir_all(dir).map_err(|e| DBError::Io(e))?;
         }
 
         // Create or truncate the manifest file
@@ -31,16 +31,16 @@ impl ManifestWriter {
             .write(true)
             .truncate(true)
             .open(path)
-            .map_err(|e| DBError::Io(e.to_string()))?;
+            .map_err(|e| DBError::Io(e))?;
 
         let mut buf = BufWriter::new(file);
 
         // Write initial header or placeholder if needed
         // (RocksDB manifest starts empty, but we can include a format version header)
         writeln!(file, "manifest_format_version 1")
-            .map_err(|e| DBError::Io(e.to_string()))?;
+            .map_err(|e| DBError::Io(e))?;
 
-        buf.flush().map_err(|e| DBError::Io(e.to_string()))?;
+        buf.flush().map_err(|e| DBError::Io(e))?;
 
         let wal = WalWriter::new(buf);
         // Return the ManifestWriter instance

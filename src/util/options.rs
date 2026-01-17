@@ -1,62 +1,172 @@
-use config::{Config, File, FileFormat};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use serde::Deserialize;
-use crate::DBError;
+use crate::util::{ColumnFamilyOptions, WriteOptions};
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct DbConfig {
-    // DB level options
-    pub create_if_missing: bool,
+#[derive(Debug, Clone)]
+pub struct Options {
+    // MemTable
+    pub write_buffer_size: usize,
+    pub max_write_buffer_number: usize,
+    pub allow_concurrent_memtable_write: bool,
+
+    // Compaction
+    pub level0_file_num_compaction_trigger: usize,
+    pub max_background_compactions: usize,
+    pub max_background_flushes: usize,
+
+    // SST / Compression
+    pub compression: CompressionType,
+
+    // Cache / Table
+    pub block_cache_size: usize,
+    pub optimize_filters_for_hits: bool,
+
+    // WAL
+    pub enable_write_ahead_log: bool,
+
+    // Files
+    pub max_open_files: i32,
+
+    // Manifest
     pub max_manifest_file_size: u64,
 
+    // Column Families
     pub system_cf: ColumnFamilyOptions,
     pub user_cf: ColumnFamilyOptions,
-
-    pub write: WriteOptions,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct DBOptions {
-    /// Create the DB if missing on open.
+#[derive(Debug, Clone)]
+pub struct OpenOptions {
+    // open
     pub create_if_missing: bool,
 
-    /// Maximum size of the manifest file before rotating.
-    pub max_manifest_file_size: u64,
+    // Default options
+    pub write: WriteOptions,
+
+    // Path override
+    pub wal_dir: Option<PathBuf>,
+    pub sst_dir: Option<PathBuf>,
+    pub manifest_dir: Option<PathBuf>,
+
+    // ===== Block cache（open-only）=====
+    pub block_cache_capacity: Option<usize>,
+    pub block_cache_shards: Option<usize>,
+
+    // Runtime variable
+    pub options: Options,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct WriteOptions {
-    /// Require strong consistency WAL writes (wait for sync thread to advance).
-    pub sync: bool,
+#[derive(Debug, Deserialize)]
+pub struct OptionsFile {
+    pub write_buffer_size: Option<usize>,
+    pub max_write_buffer_number: Option<usize>,
+    pub allow_concurrent_memtable_write: Option<bool>,
+
+    pub level0_file_num_compaction_trigger: Option<usize>,
+    pub max_background_compactions: Option<usize>,
+    pub max_background_flushes: Option<usize>,
+
+    pub compression: Option<CompressionType>,
+    pub block_cache_size: Option<usize>,
+    pub optimize_filters_for_hits: Option<bool>,
+
+    pub enable_write_ahead_log: Option<bool>,
+    pub max_open_files: Option<i32>,
+    pub max_manifest_file_size: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ColumnFamilyOptions {
-    /// Enable dynamic level-based compaction file growth.
-    pub level_compaction_dynamic_size: bool,
-
-    /// Target file size for SST flush.
-    pub target_file_size: u64,
+/// 压缩类型对应 C++ CompressionType
+#[derive(Debug, Clone, Copy)]
+pub enum CompressionType {
+    NoCompression,
+    SnappyCompression,
+    ZlibCompression,
+    Bz2Compression,
+    Lz4Compression,
+    ZstdCompression,
 }
 
-pub fn load_db_config(db_path: &PathBuf) -> Result<DbConfig, DBError> {
-    let mut cfg = Config::builder();
+impl Default for CompressionType {
+    fn default() -> Self {
+        CompressionType::SnappyCompression
+    }
+}
 
-    let yaml = db_path.join("config.yaml");
-    if yaml.exists() {
-        cfg = cfg.add_source(File::new(yaml.to_str().unwrap(), FileFormat::Yaml));
-    } else {
-        let json = db_path.join("config.json");
-        if json.exists() {
-            cfg = cfg.add_source(File::new(json.to_str().unwrap(), FileFormat::Json));
-        } else {
-            let ini = db_path.join("config.ini");
-            if ini.exists() {
-                cfg = cfg.add_source(File::new(ini.to_str().unwrap(), FileFormat::Ini));
-            }
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            create_if_missing: true,
+            write: WriteOptions::default(),
+
+            wal_dir: None,
+            sst_dir: None,
+            manifest_dir: None,
+
+            block_cache_capacity: None,
+            block_cache_shards: None,
+
+            options: Options {
+                write_buffer_size: 64 << 20,
+                max_write_buffer_number: 2,
+                allow_concurrent_memtable_write: true,
+
+                level0_file_num_compaction_trigger: 4,
+                max_background_compactions: 4,
+                max_background_flushes: 2,
+
+                compression: CompressionType::SnappyCompression,
+
+                block_cache_size: 256 << 20,
+                optimize_filters_for_hits: true,
+
+                enable_write_ahead_log: true,
+                max_open_files: 1024,
+
+                max_manifest_file_size: 64 << 20,
+
+                system_cf: ColumnFamilyOptions::default(),
+                user_cf: ColumnFamilyOptions::default(),
+            },
         }
     }
+}
 
-    let cfg = cfg.build().map_err(|e| DBError::Io(e.to_string()))?;
-    cfg.try_deserialize().map_err(|e| DBError::Io(e.to_string()))
+impl OpenOptions {
+    /// Consume open-only information and produce runtime Options
+    pub fn to_options(&self) -> Options {
+        Options {
+            // ===== MemTable =====
+            write_buffer_size: self.options.write_buffer_size,
+            max_write_buffer_number: self.options.max_write_buffer_number,
+            allow_concurrent_memtable_write: self.options.allow_concurrent_memtable_write,
+
+            // ===== Compaction =====
+            level0_file_num_compaction_trigger:
+            self.options.level0_file_num_compaction_trigger,
+            max_background_compactions:
+            self.options.max_background_compactions,
+            max_background_flushes:
+            self.options.max_background_flushes,
+
+            // ===== Compression =====
+            compression: self.options.compression,
+
+            // ===== Cache / Table =====
+            block_cache_size: self.options.block_cache_size,
+            optimize_filters_for_hits: self.options.optimize_filters_for_hits,
+
+            // ===== WAL =====
+            enable_write_ahead_log: self.options.enable_write_ahead_log,
+
+            // ===== Files =====
+            max_open_files: self.options.max_open_files,
+
+            // ===== Manifest =====
+            max_manifest_file_size: self.options.max_manifest_file_size,
+
+            // ===== Column Families =====
+            system_cf: self.options.system_cf.clone(),
+            user_cf: self.options.user_cf.clone(),
+        }
+    }
 }

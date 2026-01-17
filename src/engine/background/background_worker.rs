@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+use crate::engine::mem::{MemTable, SkipListMemTable};
+use crate::engine::sst::table_builder::TableBuilder;
 
 type Task = Box<dyn FnOnce() + Send + 'static>;
 
@@ -61,6 +63,16 @@ impl BackgroundWorker {
             handle.join().unwrap();
         }
     }
+
+    pub fn schedule_flush(&self, imm: VecDeque<Arc<dyn MemTable>>) {
+        for mem in imm {
+            let mem = Arc::clone(&mem);
+            self.schedule(move || {
+                flush_memtable(mem);
+            });
+        }
+    }
+
 }
 
 fn background_loop(inner: Arc<Inner>) {
