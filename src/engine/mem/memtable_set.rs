@@ -6,7 +6,29 @@ use crate::engine::mem::{MemTable, SkipListMemTable, ValueType};
 use crate::engine::mem::SequenceNumber;
 use crate::engine::wal::write_batch::{WriteBatch, WriteBatchEntry};
 
-/// 等价于 RocksDB 的 MemTableList / MemTableSet
+#[repr(u8)]
+pub enum CfType {
+    System = 0,
+    User = 1,
+}
+
+impl CfType {
+    pub fn from_u8(
+        cf_type: u8,
+    ) -> Result<Self, DBError> {
+        match cf_type {
+            0 => Ok(CfType::User),
+            1 => Ok(CfType::System),
+            _ => Err(DBError::InvalidColumnFamily(
+                format!(
+                    "Invalid column family type {}",
+                    cf_type
+                )
+            )),
+        }
+    }
+}
+
 struct CfMemTables {
     /// 当前可写的 memtable
     active: Arc<dyn MemTable>,
@@ -28,7 +50,7 @@ impl MemTableSet {
 
         let mut map = HashMap::new();
         for cf in cfs{
-            let active = Arc::new(SkipListMemTable::new(seq));
+            let active = Arc::new(SkipListMemTable::new(*cf, seq));
             map.insert(
                 *cf,
                 CfMemTables {
@@ -75,7 +97,7 @@ impl MemTableSet {
     ) -> Result<(), DBError> {
         let cf_tables = self.cfs.get(&cf)
             .ok_or(DBError::UnknownColumnFamily(format!(
-                "Unknown column family id: {}",
+                "Unknown column family id: {:?}",
                 cf)))?;
         cf_tables.active.insert(seq, key, value, value_type)
     }
@@ -84,11 +106,11 @@ impl MemTableSet {
     pub fn freeze_active(&mut self, cf: ColumnFamilyId, new_seq: SequenceNumber) -> Result<VecDeque<Arc<dyn MemTable>>, DBError>{
         let cf_tables = self.cfs.get_mut(&cf)
             .ok_or(DBError::UnknownColumnFamily(format!(
-                "Unknown column family id: {}",
+                "Unknown column family id: {:?}",
                 cf)))?;
         let old = std::mem::replace(
             &mut cf_tables.active,
-            Arc::new(SkipListMemTable::new(new_seq)),
+            Arc::new(SkipListMemTable::new(cf, new_seq)),
         );
         cf_tables.immutables.push_back(old);
         Ok(cf_tables.immutables)

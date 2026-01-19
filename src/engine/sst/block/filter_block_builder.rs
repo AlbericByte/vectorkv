@@ -1,9 +1,10 @@
-use crate::engine::sst::block::BloomFilterBuilder;
+use std::sync::Arc;
+use crate::engine::sst::block::{BloomFilterBuilder, FilterPolicy};
 
 /// FilterBlockBuilder collects bloom filters for each data block
 /// and generates the SSTable-level filter block.
 pub struct FilterBlockBuilder {
-    bits_per_key: usize,          // Bloom filter bits per key
+    filter_policy: Arc<dyn FilterPolicy>,         // Bloom filter bits per key
     keys: Vec<Vec<u8>>,           // Keys in current block
     filters: Vec<Vec<u8>>,        // Bloom filter bytes for each block
     block_offsets: Vec<u64>,      // File offsets of each data block
@@ -11,9 +12,9 @@ pub struct FilterBlockBuilder {
 
 impl FilterBlockBuilder {
     /// Create a new FilterBlockBuilder
-    pub fn new(bits_per_key: usize) -> Self {
+    pub fn new(filter_policy: Arc<dyn FilterPolicy>) -> Self {
         Self {
-            bits_per_key,
+            filter_policy,
             keys: Vec::new(),
             filters: Vec::new(),
             block_offsets: Vec::new(),
@@ -37,11 +38,8 @@ impl FilterBlockBuilder {
 
     /// Finish the bloom filter for current block
     fn finish_block(&mut self) {
-        let mut builder = BloomFilterBuilder::new(self.bits_per_key);
-        for key in &self.keys {
-            builder.add_key(key);
-        }
-        let filter_bytes = builder.finish();
+        let key_refs: Vec<&[u8]> = self.keys.iter().map(|k| k.as_slice()).collect();
+        let filter_bytes = self.filter_policy.create_filter(&key_refs);
         self.filters.push(filter_bytes);
         self.keys.clear();
     }

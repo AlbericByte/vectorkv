@@ -1,10 +1,13 @@
 use crate::engine::sst::hash64;
 
 pub trait FilterPolicy: Send + Sync {
+    fn name(&self) -> &str;
+    fn create_filter(&self, keys: &[&[u8]]) -> Vec<u8>;
     fn may_match(&self, key: &[u8], filter: &[u8]) -> bool;
 }
 
 pub struct BloomFilterPolicy {
+    bits_per_key: usize,
     k: u8,
 }
 
@@ -13,11 +16,25 @@ impl BloomFilterPolicy {
         let mut k = (bits_per_key as f64 * 0.69) as i32;
         if k < 1 { k = 1; }
         if k > 30 { k = 30; }
-        Self { k: k as u8 }
+        Self {
+            bits_per_key,
+            k: k as u8 }
     }
 }
 
 impl FilterPolicy for BloomFilterPolicy {
+    fn name(&self) -> &str {
+        "custom.BloomFilter"
+    }
+
+    fn create_filter(&self, keys: &[&[u8]]) -> Vec<u8> {
+        let mut builder = BloomFilterBuilder::new(self.bits_per_key);
+        for key in keys {
+            builder.add_key(key);
+        }
+        builder.finish()
+    }
+
     fn may_match(&self, key: &[u8], filter: &[u8]) -> bool {
         if filter.len() < 2 {
             return true;

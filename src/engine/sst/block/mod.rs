@@ -10,7 +10,7 @@ mod index_block;
 mod metaindex_block;
 mod table_properties;
 mod lsm_codec;
-mod FilterBlockBuilder;
+mod filter_block_builder;
 
 pub use block::{BlockBuilder, BLOCK_TRAILER_SIZE};
 pub use lsm_codec::{get_varint32, get_varint64, put_varint32, put_varint64};
@@ -23,5 +23,5 @@ pub use block_cache::{BlockCache, BlockCacheKey};
 pub use shard_cache::Shard;
 pub use metaindex_block::{MetaIndexBlock, MetaIndexBlockBuilder};
 pub use index_block::IndexBlock;
-pub use FilterBlockBuilder::FilterBlockBuilder;
+pub use filter_block_builder::FilterBlockBuilder;
 pub use table_properties::TableProperties;

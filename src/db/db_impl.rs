@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use crate::db::db_iterator::DBIterator;
@@ -54,7 +55,7 @@ impl DB for DBImpl {
         drop(vs);
 
         // 2. 写 WAL
-        if self.db_config.write.sync {
+        if self.options.enable_write_ahead_log {
             self.wal_manager.append_sync(base_seq, &batch)?;
         } else {
             self.wal_manager.append_sync(base_seq, &batch)?;
@@ -115,15 +116,20 @@ impl DB for DBImpl {
 
     fn flush_memtable(&self, mem: Arc<dyn MemTable>) -> Result<()> {
         // 1️⃣ 创建 SST 文件
+        let cf = mem.cf_id();
         let mut vs = self.version_set.lock().unwrap();
         let file_number = vs.new_file_number();
-        let file_path = self.options.sst_path(file_number);
+        let file_path = self.db_config.sst_path(file_number);
         let file = File::create(&file_path)?;
+        let cfd = vs.column_family_by_id(cf)
+            .ok_or_else(|| DBError::InvalidColumnFamily(format!("CF id {} not found", cf)))?;
+        let cf_options = cfd.options(&self.options);
+
 
         // 2️⃣ TableBuilder
-        let mut builder = TableBuilder::new(
+        let mut builder = TableBuilder::from_options(
             BufWriter::new(file),
-            self.options.clone(),
+            &cf_options,
         );
 
         // 3️⃣ 遍历 memtable

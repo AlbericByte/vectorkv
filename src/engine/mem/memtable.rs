@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use crate::DBError;
-use crate::engine::mem::SequenceNumber;
+use crate::engine::mem::{ColumnFamilyId, SequenceNumber};
 use super::skiplist::{Node, SkipList};
 use super::skiplist::Arena;
 
@@ -175,6 +175,7 @@ impl<'a> Iterator for MemTableIterator<'a> {
 }
 
 pub trait MemTable: Send + Sync {
+    fn cf_id(&self) -> ColumnFamilyId;
     fn add(&mut self, seq: SequenceNumber, user_key: &[u8], value: &[u8], value_type: ValueType);
     fn get(&self, seq: SequenceNumber, key: &[u8]) -> Option<Vec<u8>>;
     fn approximate_memory_usage(&self) -> usize;
@@ -185,6 +186,7 @@ pub trait MemTable: Send + Sync {
 
 // MemTable 实现
 pub struct SkipListMemTable {
+    cf: ColumnFamilyId,
     pub(crate) skiplist: SkipList<InternalKey, Vec<u8>,fn(&InternalKey, &InternalKey) -> std::cmp::Ordering,fn(&InternalKey, &InternalKey) -> bool>,
     memory_usage: AtomicUsize,
     immutable: AtomicBool,
@@ -193,7 +195,7 @@ pub struct SkipListMemTable {
 
 
 impl SkipListMemTable {
-    pub fn new(seq: u64) -> Self {
+    pub fn new(cf: ColumnFamilyId, seq: u64) -> Self {
         fn is_visible(a: &InternalKey, b: &InternalKey
         ) -> bool {
             a.user_key == b.user_key && a.seq <= b.seq && a.value_type!=ValueType::Delete
@@ -203,6 +205,7 @@ impl SkipListMemTable {
             fn(&InternalKey, &InternalKey) -> std::cmp::Ordering,
             fn(&InternalKey, &InternalKey) -> bool> = SkipList::new(arena, mvcc_comparator, is_visible);
         Self {
+            cf,
             skiplist,
             memory_usage:AtomicUsize::new(0),
             immutable:AtomicBool::new(false),
@@ -213,6 +216,10 @@ impl SkipListMemTable {
 
 impl MemTable for SkipListMemTable
 {
+    fn cf_id(&self) -> ColumnFamilyId {
+        self.cf
+    }
+
     fn add(&mut self, seq: SequenceNumber, user_key: &[u8], value: &[u8], value_type: ValueType) {
         // 外层 DBImpl 应该保证“只有一个写线程”在调用 add
         if self.immutable.load(AtomicOrdering::Acquire) {

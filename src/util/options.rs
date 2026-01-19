@@ -24,6 +24,8 @@ pub struct Options {
     // WAL
     pub enable_write_ahead_log: bool,
 
+    pub write_sync: bool,
+
     // Files
     pub max_open_files: i32,
 
@@ -39,9 +41,6 @@ pub struct Options {
 pub struct OpenOptions {
     // open
     pub create_if_missing: bool,
-
-    // Default options
-    pub write: WriteOptions,
 
     // Path override
     pub wal_dir: Option<PathBuf>,
@@ -71,6 +70,7 @@ pub struct OptionsFile {
     pub optimize_filters_for_hits: Option<bool>,
 
     pub enable_write_ahead_log: Option<bool>,
+    pub write_sync: Option<bool>,
     pub max_open_files: Option<i32>,
     pub max_manifest_file_size: Option<u64>,
 }
@@ -96,8 +96,6 @@ impl Default for OpenOptions {
     fn default() -> Self {
         Self {
             create_if_missing: true,
-            write: WriteOptions::default(),
-
             wal_dir: None,
             sst_dir: None,
             manifest_dir: None,
@@ -120,6 +118,7 @@ impl Default for OpenOptions {
                 optimize_filters_for_hits: true,
 
                 enable_write_ahead_log: true,
+                write_sync:true,
                 max_open_files: 1024,
 
                 max_manifest_file_size: 64 << 20,
@@ -157,6 +156,7 @@ impl OpenOptions {
 
             // ===== WAL =====
             enable_write_ahead_log: self.options.enable_write_ahead_log,
+            write_sync: self.options.write_sync,
 
             // ===== Files =====
             max_open_files: self.options.max_open_files,

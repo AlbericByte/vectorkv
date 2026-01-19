@@ -2,9 +2,11 @@ use std::{fs, io};
 use std::io::{Read, Write};
 use config::{Config, File, FileFormat};
 use std::path::{PathBuf};
+use std::sync::Arc;
 use serde::Deserialize;
 use crate::DBError;
-use crate::util::options::{OpenOptions, OptionsFile};
+use crate::engine::sst::block::FilterPolicy;
+use crate::util::options::{CompressionType, OpenOptions, OptionsFile};
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DbConfigFile {
@@ -56,6 +58,18 @@ pub struct ColumnFamilyOptions {
 
     /// Target file size for SST flush.
     pub target_file_size: u64,
+
+    pub table_options: TableOptions,
+
+    // Compression
+    pub compression: CompressionType,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TableOptions {
+    pub block_size: usize,
+    pub restart_interval: usize,
+    pub filter_policy: Option<Arc<dyn FilterPolicy>>,
 }
 
 pub fn load_db_config(db_path: &PathBuf) -> Result<DbConfigFile, DBError> {

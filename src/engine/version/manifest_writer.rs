@@ -62,7 +62,7 @@ impl ManifestWriter {
             .write(true)
             .create(false) // must already exist
             .open(&path_buf)
-            .map_err(|e| DBError::Io(e.to_string()))?;
+            .map_err(|e| DBError::Io(e))?;
 
         // Wrap the file in a buffered writer
         let buf_writer = BufWriter::new(file);

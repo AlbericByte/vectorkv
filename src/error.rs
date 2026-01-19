@@ -9,6 +9,7 @@ pub enum DBError {
     InvalidArgument(String),
     UnknownColumnFamily(String),
     NotFound(String),
+    InvalidColumnFamily(String),
     Other(String),
 }
 

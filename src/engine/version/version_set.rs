@@ -4,10 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::DBError;
 use crate::engine::mem::ColumnFamilyId;
+use crate::engine::mem::memtable_set::CfType;
 use crate::engine::sst::iterator::{DBIterator, EmptyIterator};
 use crate::engine::sst::TableCache;
 use crate::engine::version::{read_current, FileMetaData, ManifestReader, ManifestWriter, Version, VersionEdit};
-use crate::util::{DbConfig, FIRST_MANIFEST, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
+use crate::util::{ColumnFamilyOptions, DbConfig, Options, FIRST_MANIFEST, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
 use crate::util::constants::{SYSTEM_COLUMN_FAMILY_ID, USER_COLUMN_FAMILY_ID};
 
 pub struct VersionSet {
@@ -32,9 +33,19 @@ pub struct VersionSet {
 
 pub struct ColumnFamilyData {
     pub cf_id: ColumnFamilyId,
+    pub cf_type: CfType,
     pub name: String,
     pub current: Arc<Version>,
     pub builder: VersionBuilder,
+}
+
+impl ColumnFamilyData {
+    fn options(&self, global_options: &Options) -> &ColumnFamilyOptions {
+        match self.cf_type {
+            CfType::User => &global_options.user_cf,
+            CfType::System => &global_options.system_cf,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -69,6 +80,7 @@ impl VersionSet {
             // build system column family
             let system_cf = Arc::new(ColumnFamilyData {
                 cf_id: USER_COLUMN_FAMILY_ID,
+                cf_type: CfType::System,
                 name: SYSTEM_COLUMN_FAMILY.to_string(),
                 current: Arc::new(Version::new_empty(Arc::clone(&table_cache))),
                 builder: VersionBuilder {
@@ -81,6 +93,7 @@ impl VersionSet {
             // build system column family
             let user_cf = Arc::new(ColumnFamilyData {
                 cf_id: SYSTEM_COLUMN_FAMILY_ID,
+                cf_type: CfType::User,
                 name: USER_COLUMN_FAMILY.to_string(),
                 current: Arc::new(Version::new_empty(Arc::clone(&table_cache))),
                 builder: VersionBuilder {
@@ -118,6 +131,7 @@ impl VersionSet {
                 cf_map.entry(cf_id).or_insert_with(|| {
                     Arc::new(ColumnFamilyData {
                         cf_id,
+                        cf_type: edit.cf_type,
                         name: edit.cf_name.clone().unwrap_or_else(|| format!("cf_{}", cf_id)),
                         current: Arc::new(Version::new_empty(Arc::clone(&table_cache))),
                         builder: VersionBuilder {
@@ -208,6 +222,7 @@ impl VersionSet {
 
             let cf_data = Arc::new(ColumnFamilyData {
                 cf_id: edit.cf_id,
+                cf_type: edit.cf_type,
                 name: cf.name.clone(),
                 current: Arc::new(new_version),
                 builder: cf.builder.clone(),
@@ -229,14 +244,14 @@ impl VersionSet {
 
     /// Get a value by key from the current column family Version.
     /// Errors are converted into `DBError` without crashing the program.
-    pub fn get(&self, cf_id: u32, key: &[u8]) -> Result<Option<Vec<u8>>, DBError> {
+    pub fn get(&self, cf_id: ColumnFamilyId, key: &[u8]) -> Result<Option<Vec<u8>>, DBError> {
         let cf = self.cf_map.get(&cf_id)
             .ok_or(DBError::NotFound(format!("column family {} not found", cf_id)))?;
         match cf.current.get(key) {
             Ok(Some(v)) => Ok(Some(v)),
             Ok(None) => Ok(None),
-            Err(e) => Err(DBError::Io(format!(
-                                               "Get operation failed on CF {}, key {:?}, error: {}",
+            Err(e) => Err(DBError::InvalidColumnFamily(format!(
+                                               "Get operation failed on CF {}, key {}, error: {}",
                                                cf_id,
                                                String::from_utf8_lossy(key), // convert &[u8] to readable text
                                                e
@@ -268,4 +283,9 @@ impl VersionSet {
         self.cf_map.values().map(|cf| cf.cf_id.clone()).collect()
     }
 
+    pub fn column_family_by_id(&self, cf_id: ColumnFamilyId) -> Result<&ColumnFamilyData, DBError> {
+        self.cf_map.get(&cf_id)
+            .map(|arc| arc.as_ref())   // &Arc<T> -> &T
+            .ok_or_else(|| DBError::InvalidColumnFamily(format!("CF id {} not found", cf_id)))?;
+    }
 }

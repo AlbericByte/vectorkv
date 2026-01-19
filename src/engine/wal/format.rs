@@ -121,7 +121,7 @@ fn need(buf: &[u8], pos: usize, n: usize) -> Result<(), DBError> {
     Ok(())
 }
 
-fn read_u8(buf: &[u8], pos: &mut usize) -> Result<u8, DBError> {
+pub(crate) fn read_u8(buf: &[u8], pos: &mut usize) -> Result<u8, DBError> {
     need(buf, *pos, 1)?;
     let v = buf[*pos];
     *pos += 1;

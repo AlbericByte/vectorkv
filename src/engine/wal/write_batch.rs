@@ -3,12 +3,12 @@ use crate::engine::mem::ColumnFamilyId;
 #[derive(Debug)]
 pub enum WriteBatchEntry {
     Put {
-        cf: u32,
+        cf: ColumnFamilyId,
         key: Vec<u8>,
         value: Vec<u8>,
     },
     Delete {
-        cf: u32,
+        cf: ColumnFamilyId,
         key: Vec<u8>,
     },
 }
@@ -26,7 +26,7 @@ impl WriteBatch {
         }
     }
 
-    pub fn put(&mut self, cf: u32, key: &[u8], value: &[u8]) {
+    pub fn put(&mut self, cf: ColumnFamilyId, key: &[u8], value: &[u8]) {
         if !self.involved_cfs.contains(&cf) {
             self.involved_cfs.push(cf);
         }
@@ -37,7 +37,7 @@ impl WriteBatch {
         });
     }
 
-    pub fn delete(&mut self, cf: u32, key: &[u8]) {
+    pub fn delete(&mut self, cf: ColumnFamilyId, key: &[u8]) {
         if !self.involved_cfs.contains(&cf) {
             self.involved_cfs.push(cf);
         }

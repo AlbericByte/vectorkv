@@ -1,8 +1,9 @@
-use std::sync::Arc;
 use crate::DBError;
 use crate::engine::mem::{ColumnFamilyId, SequenceNumber};
+use crate::engine::mem::memtable_set::CfType;
 use crate::engine::version::{FileMetaData, FileNumber};
 use crate::engine::wal::{read_bytes, read_string, read_u32, read_u64};
+use crate::engine::wal::format::read_u8;
 
 const TAG_CF_ID: u8 = 1;
 const TAG_CF_ADD: u8 = 2;
@@ -14,6 +15,7 @@ const TAG_LAST_SEQUENCE: u8 = 7;
 
 pub struct VersionEdit {
     pub cf_id: ColumnFamilyId,
+    pub cf_type: CfType,
     pub cf_name: Option<String>,   // only CF_ADD writes this
     pub is_cf_add: bool,
     pub is_cf_drop: bool,
@@ -27,6 +29,7 @@ impl Default for VersionEdit {
     fn default() -> Self {
         Self {
             cf_id: 0,
+            cf_type: CfType::User,
             cf_name: None,
             is_cf_add: false,
             is_cf_drop: false,
@@ -40,9 +43,10 @@ impl Default for VersionEdit {
 }
 
 impl VersionEdit {
-    pub fn new(cf_id: ColumnFamilyId) -> Self {
+    pub fn new(cf_id: ColumnFamilyId, cf_type: CfType) -> Self {
         Self {
             cf_id,
+            cf_type,
             cf_name: None,
             is_cf_add: false,
             is_cf_drop: false,
@@ -62,6 +66,7 @@ impl VersionEdit {
 
             // encode cf_id
             buf.extend_from_slice(&edit.cf_id.to_le_bytes());
+            buf.push(edit.cf_type as u8);
 
             // encode cf_name
             let name_bytes = edit.cf_name.as_ref().unwrap().as_bytes();
@@ -71,9 +76,11 @@ impl VersionEdit {
             // ---- column family drop ----
             buf.push(TAG_CF_DROP);
             buf.extend_from_slice(&edit.cf_id.to_le_bytes());
+            buf.push(edit.cf_type as u8);
         } else {
             buf.push(TAG_CF_ID);
             buf.extend_from_slice(&edit.cf_id.to_le_bytes());
+            buf.push(edit.cf_type as u8);
         }
 
         // tag-based encoding（像 protobuf，但手写）
@@ -121,21 +128,27 @@ impl VersionEdit {
             match tag {
                 TAG_CF_ADD => {
                     let cf_id = read_u32(buf, &mut pos)?;
+                    let cf_type = read_u8(buf, &mut pos)?;
                     let name = read_string(buf, &mut pos)?;
                     edit.cf_id = cf_id;
+                    edit.cf_type = CfType::from_u8(cf_type)?;
                     edit.cf_name = Some(name);
                     edit.is_cf_add = true;
                 }
 
                 TAG_CF_DROP => {
                     let cf_id = read_u32(buf, &mut pos)?;
+                    let cf_type = read_u8(buf, &mut pos)?;
                     edit.cf_id = cf_id;
+                    edit.cf_type = CfType::from_u8(cf_type)?;
                     edit.is_cf_drop = true;
                 }
 
                 TAG_CF_ID => {
                     let cf = read_u32(buf, &mut pos)?;
+                    let cf_type = read_u8(buf, &mut pos)?;
                     edit.cf_id = cf;
+                    edit.cf_type = CfType::from_u8(cf_type)?;
                 }
 
                 TAG_ADD_FILE => {

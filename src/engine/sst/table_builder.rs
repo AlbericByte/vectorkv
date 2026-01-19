@@ -2,8 +2,9 @@
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
 use crate::DBError;
-use crate::engine::sst::block::{BlockBuilder, FilterBlockBuilder, MetaIndexBlockBuilder, TableProperties};
+use crate::engine::sst::block::{BlockBuilder, filter_block_builder, MetaIndexBlockBuilder, TableProperties, FilterBlockBuilder};
 use crate::engine::sst::format::{BlockHandle, Footer};
+use crate::util::{ColumnFamilyOptions, Options};
 
 pub struct TableBuilder<W: Write> {
     dst: W,
@@ -27,6 +28,19 @@ pub struct TableBuilder<W: Write> {
 }
 
 impl<W: Write> TableBuilder<W> {
+
+    pub fn from_options(dst: W, cf_opts: &ColumnFamilyOptions) -> Self {
+        let table_opts = &cf_opts.table_options;
+        Self::new(
+            dst,
+            table_opts.block_size,
+            table_opts.restart_interval,
+            table_opts.filter_policy
+                .as_ref()
+                .map(|p| FilterBlockBuilder::new(p.clone())),
+        )
+    }
+
     pub fn new(
         dst: W,
         block_size: usize,
