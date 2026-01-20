@@ -93,6 +93,48 @@ impl<K, V, C, M> SkipList<K, V, C, M> {
         }
         height
     }
+
+    pub fn front(&self) -> Option<(&K, &V)> {
+        let head_ptr = self.head.load(AtomicOrdering::Acquire);
+        if head_ptr.is_null() {
+            return None;
+        }
+
+        let head_ref = unsafe { &*head_ptr };
+        let first_ptr = head_ref.next.get(0)?.load(AtomicOrdering::Acquire);
+
+        if first_ptr.is_null() {
+            None
+        } else {
+            let first_ref = unsafe { &*first_ptr };
+            Some((&first_ref.key, &first_ref.value))
+        }
+    }
+
+    pub fn back(&self) -> Option<(&K, &V)> {
+        let mut node_ptr = self.head.load(AtomicOrdering::Acquire);
+        if node_ptr.is_null() {
+            return None;
+        }
+
+        let head_ref = unsafe { &*node_ptr };
+        let mut current_ptr = head_ref.next.get(0)?.load(AtomicOrdering::Acquire);
+        if current_ptr.is_null() {
+            return None;
+        }
+
+        let mut last_ref = unsafe { &*current_ptr };
+
+        while let Some(next_atomic) = last_ref.next.get(0) {
+            let next_ptr = next_atomic.load(AtomicOrdering::Acquire);
+            if next_ptr.is_null() {
+                break;
+            }
+            last_ref = unsafe { &*next_ptr };
+        }
+
+        Some((&last_ref.key, &last_ref.value))
+    }
 }
 
 impl<K:Default, V:Default, C, M> SkipList<K, V, C, M>
@@ -114,7 +156,7 @@ where
         }
     }
 
-    pub(crate) fn insert(&mut self, key: K, value: V) {
+    pub(crate) fn insert(&mut self, key: K, value: V) -> *const Node<K, V> {
         let mut update: [*mut Node<K, V>; MAX_HEIGHT] = [std::ptr::null_mut(); MAX_HEIGHT];
         let mut x = self.head.load(AtomicOrdering::Acquire);
 
@@ -148,6 +190,7 @@ where
                 (*update[i]).next[i].store(new_node, AtomicOrdering::Release);
             }
         }
+        new_node as *const Node<K, V>
     }
 
     pub(crate) fn search(&self, key: &K) -> Option<&V> {

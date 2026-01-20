@@ -1,5 +1,5 @@
 use crate::DBError;
-use crate::engine::mem::{ColumnFamilyId, SequenceNumber};
+use crate::engine::mem::{ColumnFamilyId, InternalKey, SequenceNumber};
 use crate::engine::mem::memtable_set::CfType;
 use crate::engine::version::{FileMetaData, FileNumber};
 use crate::engine::wal::{read_bytes, read_string, read_u32, read_u64};
@@ -200,6 +200,25 @@ impl VersionEdit {
         }
 
         Ok(edit)
+    }
+
+    pub fn add_file(
+        &mut self,
+        level: usize,
+        file_number: u64,
+        file_size: u64,
+        smallest_key: &[u8],
+        largest_key: &[u8],
+    ) {
+        let meta = FileMetaData {
+            file_number,
+            file_size,
+            smallest_key: smallest_key.to_vec(),
+            largest_key: largest_key.to_vec(),
+            allowed_seeks: 1 << 30,
+        };
+
+        self.add_files.push((level, meta));
     }
 }
 

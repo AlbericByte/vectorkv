@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use crate::DBError;
 use crate::engine::mem::{ColumnFamilyId, SequenceNumber};
 use super::skiplist::{Node, SkipList};
@@ -182,6 +182,8 @@ pub trait MemTable: Send + Sync {
     fn mark_immutable(&mut self);
     fn is_immutable(&self) -> bool;
     fn iter(&self) -> MemTableIterator;
+    fn smallest_key(&self) -> &[u8];
+    fn largest_key(&self) -> &[u8];
 }
 
 // MemTable 实现
@@ -191,6 +193,7 @@ pub struct SkipListMemTable {
     memory_usage: AtomicUsize,
     immutable: AtomicBool,
     frontier_seq: u64,
+    tail: Option<*const Node<InternalKey, Vec<u8>>>,
 }
 
 
@@ -210,6 +213,7 @@ impl SkipListMemTable {
             memory_usage:AtomicUsize::new(0),
             immutable:AtomicBool::new(false),
             frontier_seq: seq,
+            tail: None,
         }
     }
 }
@@ -238,7 +242,8 @@ impl MemTable for SkipListMemTable
             .fetch_add(bytes, AtomicOrdering::Relaxed);
 
         // 假设 SkipList::insert 是 &self + 内部原子实现
-        self.skiplist.insert(ikey, v);
+        let node_ptr = self.skiplist.insert(ikey, v);
+        self.tail = Some(node_ptr);
     }
 
     fn get(&self, seq:SequenceNumber, key: &[u8]) -> Option<Vec<u8>> {
@@ -276,6 +281,24 @@ impl MemTable for SkipListMemTable
                             .as_ref()
                     })
             },
+        }
+    }
+
+    fn smallest_key(&self) -> &[u8] {
+        self.skiplist.front().map(|(k, _v)| k.as_encoded())
+            .unwrap_or(b"")
+    }
+
+    fn largest_key(&self) -> &[u8] {
+        match self.tail {
+            Some(ptr) => unsafe {
+                // 返回 InternalKey.user_key 的字节切片
+                &(*ptr).key.user_key
+            },
+            None => {
+                // 如果 skiplist 为空，返回空切片
+                &[]
+            }
         }
     }
 }

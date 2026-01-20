@@ -7,6 +7,7 @@ pub struct FileMetaData {
 
     pub smallest_key: Vec<u8>,
     pub largest_key: Vec<u8>,
+    pub allowed_seeks: u32,
 }
 
 impl FileMetaData {

@@ -2,11 +2,13 @@
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
 use crate::DBError;
-use crate::engine::sst::block::{BlockBuilder, filter_block_builder, MetaIndexBlockBuilder, TableProperties, FilterBlockBuilder};
+use crate::engine::sst::block::{BlockBuilder, MetaIndexBlockBuilder, TableProperties, FilterBlockBuilder};
 use crate::engine::sst::format::{BlockHandle, Footer};
+use crate::engine::sst::SstReader;
 use crate::util::{ColumnFamilyOptions, Options};
 
 pub struct TableBuilder<W: Write> {
+    file_number: u64,
     dst: W,
     offset: u64,
     block_size: usize,
@@ -29,9 +31,10 @@ pub struct TableBuilder<W: Write> {
 
 impl<W: Write> TableBuilder<W> {
 
-    pub fn from_options(dst: W, cf_opts: &ColumnFamilyOptions) -> Self {
+    pub fn from_options(file_number:u64, dst: W, cf_opts: &ColumnFamilyOptions) -> Self {
         let table_opts = &cf_opts.table_options;
         Self::new(
+            file_number,
             dst,
             table_opts.block_size,
             table_opts.restart_interval,
@@ -42,12 +45,14 @@ impl<W: Write> TableBuilder<W> {
     }
 
     pub fn new(
+        file_number:u64,
         dst: W,
         block_size: usize,
         restart_interval: usize,
         filter_block: Option<FilterBlockBuilder>,
     ) -> Self {
         Self {
+            file_number,
             dst,
             offset: 0,
             block_size,

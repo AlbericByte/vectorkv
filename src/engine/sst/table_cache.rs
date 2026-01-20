@@ -73,4 +73,17 @@ impl TableCache {
             .ok_or(DBError::NotFound(format!("file {} not found", file_number)))?;
         table.get(key)
     }
+
+    pub fn insert(&self, file_number: u64, table: Arc<SstReader>) {
+        let mut cache = self.cache.lock().unwrap();  // 获取锁
+        cache.insert(file_number, table);            // 插入或覆盖
+    }
+
+    pub fn block_cache(&self) -> Arc<BlockCache<DataBlock>> {
+        Arc::clone(&self.block_cache)
+    }
+
+    pub fn filter_policy(&self) -> Option<Arc<dyn FilterPolicy>> {
+        self.filter_policy.clone()
+    }
 }

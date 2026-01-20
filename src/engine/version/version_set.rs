@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::DBError;
-use crate::engine::mem::ColumnFamilyId;
+use crate::engine::mem::{ColumnFamilyId, InternalKey};
 use crate::engine::mem::memtable_set::CfType;
 use crate::engine::sst::iterator::{DBIterator, EmptyIterator};
-use crate::engine::sst::TableCache;
+use crate::engine::sst::{SstReader, TableCache};
 use crate::engine::version::{read_current, FileMetaData, ManifestReader, ManifestWriter, Version, VersionEdit};
 use crate::util::{ColumnFamilyOptions, DbConfig, Options, FIRST_MANIFEST, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
 use crate::util::constants::{SYSTEM_COLUMN_FAMILY_ID, USER_COLUMN_FAMILY_ID};
@@ -284,8 +284,44 @@ impl VersionSet {
     }
 
     pub fn column_family_by_id(&self, cf_id: ColumnFamilyId) -> Result<&ColumnFamilyData, DBError> {
-        self.cf_map.get(&cf_id)
-            .map(|arc| arc.as_ref())   // &Arc<T> -> &T
-            .ok_or_else(|| DBError::InvalidColumnFamily(format!("CF id {} not found", cf_id)))?;
+        self.cf_map
+            .get(&cf_id)
+            .map(|arc| arc.as_ref())
+            .ok_or_else(|| DBError::InvalidColumnFamily(format!("CF id {} not found", cf_id)))
+    }
+
+    pub fn install_table(
+        &mut self,
+        cf: ColumnFamilyId,
+        cf_type: CfType,
+        file_number: u64,
+        file_path: &Path,
+        smallest: &[u8],
+        largest: &[u8],
+    ) -> Result<(), DBError> {
+        // 1️⃣ 构造 VersionEdit
+        let mut edit = VersionEdit::new(cf, cf_type);
+        let metadata = std::fs::metadata(file_path)?;
+        let file_size = metadata.len();
+
+        edit.add_file(
+            0,              // flush → L0
+            file_number,
+            file_size,
+            smallest,
+            largest,
+        );
+
+        // 2️⃣（可选）预热 table cache
+        let table = SstReader::open(file_number,
+                        file_path.to_path_buf(),
+                        self.table_cache.block_cache(),
+                        self.table_cache.filter_policy())?;
+        self.table_cache.insert(file_number, Arc::new(table));
+
+        // 3️⃣ 写 MANIFEST + 安装新 Versio n
+        self.log_and_apply(edit)?;
+
+        Ok(())
     }
 }

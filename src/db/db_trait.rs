@@ -1,7 +1,8 @@
+use std::sync::Arc;
 use crate::db::db_iterator::DBIterator;
 use crate::db::snapshot::Snapshot;
 use crate::DBError;
-use crate::engine::mem::ColumnFamilyId;
+use crate::engine::mem::{ColumnFamilyId, MemTable};
 use crate::engine::wal::write_batch::WriteBatch;
 
 pub trait DB: Send + Sync {
@@ -27,4 +28,6 @@ pub trait DB: Send + Sync {
     fn get_snapshot(&self) -> Snapshot;
 
     fn release_snapshot(&self, snapshot: Snapshot);
+
+    fn flush_memtable(&self, mem: Arc<dyn MemTable>) -> Result<(),DBError>;
 }

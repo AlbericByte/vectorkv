@@ -114,7 +114,7 @@ impl DB for DBImpl {
         // Rust 自动 drop，无需人工干预
     }
 
-    fn flush_memtable(&self, mem: Arc<dyn MemTable>) -> Result<()> {
+    fn flush_memtable(&self, mem: Arc<dyn MemTable>) -> Result<(),DBError> {
         // 1️⃣ 创建 SST 文件
         let cf = mem.cf_id();
         let mut vs = self.version_set.lock().unwrap();
@@ -128,22 +128,25 @@ impl DB for DBImpl {
 
         // 2️⃣ TableBuilder
         let mut builder = TableBuilder::from_options(
+            file_number,
             BufWriter::new(file),
             &cf_options,
         );
 
         // 3️⃣ 遍历 memtable
-        mem.iter(|key, value| {
+        for (key, value) in mem.iter() {
             builder.add(key, value);
-        });
+        }
 
         // 4️⃣ finish -> 写 footer
-        let table_handle = builder.finish()?;
+        builder.finish()?;
 
         // 5️⃣ 安装到 VersionSet (LSM)
-        self.version_set.install_table(
+        vs.install_table(
+            cf,
+            cfd.cf_type,
             file_number,
-            table_handle,
+            &file_path,
             mem.smallest_key(),
             mem.largest_key(),
         )?;
