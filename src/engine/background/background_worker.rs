@@ -1,13 +1,15 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+use crate::{DBImpl, DB};
+use crate::engine::background::FlushMemTableCommand;
+use crate::engine::background::task::Command;
 use crate::engine::mem::{MemTable, SkipListMemTable};
 use crate::engine::sst::table_builder::TableBuilder;
 
-type Task = Box<dyn FnOnce() + Send + 'static>;
 
 struct Inner {
-    queue: Mutex<VecDeque<Task>>,
+    queue: Mutex<VecDeque<Box<dyn Command>>>,
     cv: Condvar,
     shutting_down: Mutex<bool>,
 }
@@ -18,7 +20,7 @@ pub struct BackgroundWorker {
 }
 
 impl BackgroundWorker {
-    pub fn new() -> Self{
+    pub fn new(db: Arc<dyn DB>) -> Self{
         Self::start()
     }
     
@@ -32,7 +34,7 @@ impl BackgroundWorker {
         let worker_inner = Arc::clone(&inner);
 
         let handle = thread::spawn(move || {
-            background_loop(worker_inner);
+            Self::background_loop(worker_inner);
         });
 
         Self {
@@ -41,17 +43,42 @@ impl BackgroundWorker {
         }
     }
 
-    pub fn schedule<F>(&self, f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
+    pub fn schedule_task(&self, task: Box<dyn Command>) {
         let mut queue = self.inner.queue.lock()
-            .unwrap_or_else(|e| e.into_inner());();
-        queue.push_back(Box::new(f));
+            .unwrap_or_else(|e| e.into_inner());
+        queue.push_back(task);
         self.inner.cv.notify_one();
     }
 
-    pub fn shutdown(mut self) {
+    pub fn schedule_flush(
+        &self,
+        db: &Arc<DBImpl>,
+        imm: VecDeque<Arc<dyn MemTable>>,
+    ) {
+        let cmd: Box<dyn Command> = Box::new(FlushMemTableCommand::new(db, imm));
+        self.schedule_task(cmd);
+    }
+
+    fn background_loop(inner: Arc<Inner>) {
+        loop {
+            let task_opt = {
+                let mut queue = inner.queue.lock().unwrap();
+                while queue.is_empty() {
+                    if *inner.shutting_down.lock().unwrap() {
+                        return;
+                    }
+                    queue = inner.cv.wait(queue).unwrap();
+                }
+                queue.pop_front()
+            };
+
+            if let Some(cmd) = task_opt {
+                cmd.execute();
+            }
+        }
+    }
+
+    pub fn shutdown(&self) {
         {
             let mut shutting_down = self.inner.shutting_down.lock().unwrap();
             *shutting_down = true;
@@ -59,41 +86,10 @@ impl BackgroundWorker {
 
         self.inner.cv.notify_all();
 
-        if let Some(handle) = self.handle.take() {
+        if let Some(handle) = self.handle.as_ref() {
             handle.join().unwrap();
         }
     }
-
-    pub fn schedule_flush(&self, imm: VecDeque<Arc<dyn MemTable>>) {
-        for mem in imm {
-            let mem = Arc::clone(&mem);
-            self.schedule(move || {
-                flush_memtable(mem);
-            });
-        }
-    }
-
 }
 
-fn background_loop(inner: Arc<Inner>) {
-    loop {
-        let task = {
-            let mut queue = inner.queue.lock()
-                .unwrap_or_else(|e| e.into_inner());
 
-            // 和 RocksDB 一样：用 while 防虚假唤醒
-            while queue.is_empty() {
-                if *inner.shutting_down.lock().unwrap() {
-                    return;
-                }
-                queue = inner.cv.wait(queue).unwrap();
-            }
-
-            queue.pop_front()
-        };
-
-        if let Some(task) = task {
-            task(); // 顺序执行
-        }
-    }
-}

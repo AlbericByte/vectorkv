@@ -79,14 +79,14 @@ impl DB for DBImpl {
         self.version_set.lock().unwrap().get(cf, key)
     }
 
-    fn flush(&self, cf: ColumnFamilyId) -> Result<(),DBError> {
+    fn flush(self: &Arc<Self>, cf: ColumnFamilyId) -> Result<(),DBError> {
         let mut mem = self.memtables.lock().unwrap();
         let seq = self.version_set.lock().unwrap().next_sequence();
         // freeze 返回的是 Arc<MemTable>
         let imm = mem.freeze_active(cf, seq)?;
-
+        let db = Arc::clone(self);
         // 交给后台 flush
-        self.bg_worker.schedule_flush(imm);
+        self.bg_worker.schedule_flush(&db, imm);
 
         Ok(())
     }

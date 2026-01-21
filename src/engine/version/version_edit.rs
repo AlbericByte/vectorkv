@@ -168,6 +168,7 @@ impl VersionEdit {
                             file_size,
                             smallest_key,
                             largest_key,
+                            allowed_seeks: 1 << 30,
                         },
                     ));
                 }
