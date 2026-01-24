@@ -221,5 +221,9 @@ impl VersionEdit {
 
         self.add_files.push((level, meta));
     }
+
+    pub fn delete_file(&mut self, level: usize, file_number: u64) {
+        self.delete_files.push((level, file_number));
+    }
 }
 

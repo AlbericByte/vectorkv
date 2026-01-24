@@ -5,6 +5,8 @@ use config::ConfigError;
 pub enum DBError {
     Io(io::Error),
     Config(ConfigError),
+    InvalidKeyOrder(String),
+    EmptyTable(String),
     Corruption(String),
     InvalidArgument(String),
     UnknownColumnFamily(String),

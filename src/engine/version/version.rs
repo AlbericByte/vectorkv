@@ -7,7 +7,7 @@ use crate::util::NUM_LEVELS;
 
 #[derive(Clone)]
 pub struct Version {
-    pub levels: [Vec<Arc<FileMetaData>>; NUM_LEVELS],
+    levels: [Vec<Arc<FileMetaData>>; NUM_LEVELS],
     table_cache: Arc<TableCache>,
 }
 
@@ -150,5 +150,13 @@ impl Version {
     ) -> Option<Vec<u8>> {
         let reader = self.table_cache.find_table(file)?;
         reader.get(key).ok()?
+    }
+
+    pub fn levels(&self) -> [Vec<Arc<FileMetaData>>; NUM_LEVELS] {
+        self.levels.clone()
+    }
+
+    pub fn table_cache(&self) -> Arc<TableCache> {
+        self.table_cache.clone()
     }
 }

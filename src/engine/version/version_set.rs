@@ -2,16 +2,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 use crate::DBError;
 use crate::engine::mem::{ColumnFamilyId, InternalKey};
 use crate::engine::mem::memtable_set::CfType;
 use crate::engine::sst::iterator::{DBIterator, EmptyIterator};
 use crate::engine::sst::{SstReader, TableCache};
 use crate::engine::version::{read_current, FileMetaData, ManifestReader, ManifestWriter, Version, VersionEdit};
-use crate::util::{ColumnFamilyOptions, DbConfig, Options, FIRST_MANIFEST, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
+use crate::engine::version::compaction::{Compactor, SingleLevelCompaction};
+use crate::util::{ColumnFamilyOptions, DbConfig, Options, FIRST_MANIFEST, NUM_LEVELS, SYSTEM_COLUMN_FAMILY, USER_COLUMN_FAMILY};
 use crate::util::constants::{SYSTEM_COLUMN_FAMILY_ID, USER_COLUMN_FAMILY_ID};
 
 pub struct VersionSet {
+    db_config: Arc<DbConfig>,
     /// Current versions of all column families
     cf_map: HashMap<u32, Arc<ColumnFamilyData>>,
 
@@ -50,8 +53,10 @@ impl ColumnFamilyData {
 
 #[derive(Clone)]
 pub struct VersionBuilder {
+    pub levels: [Vec<Arc<FileMetaData>>; NUM_LEVELS],
     pub added_files: Vec<FileMetaData>,
     pub deleted_files: Vec<u64>,
+    pub table_cache: Arc<TableCache>,
 }
 
 impl VersionSet {
@@ -66,6 +71,11 @@ impl VersionSet {
                 let t = s.trim();
                 if t.is_empty() {None} else {Some(t.to_string())}
             });
+
+        let mut cf_map: HashMap<u32, Arc<ColumnFamilyData>> = HashMap::new();
+        let mut last_sequence = 0u64;
+        let mut next_file_number = 1u64;
+
         // If no valid manifest pointer is found, treat this as the first startup
         if manifest_file.is_none() {
             let manifest_name = FIRST_MANIFEST;
@@ -75,7 +85,6 @@ impl VersionSet {
 
             // 创建 manifest
             let manifest = ManifestWriter::create_new(&manifest_path)?;
-            let mut cf_map: HashMap<u32, Arc<ColumnFamilyData>> = HashMap::new();
 
             // build system column family
             let system_cf = Arc::new(ColumnFamilyData {
@@ -83,10 +92,7 @@ impl VersionSet {
                 cf_type: CfType::System,
                 name: SYSTEM_COLUMN_FAMILY.to_string(),
                 current: Arc::new(Version::new_empty(Arc::clone(&table_cache))),
-                builder: VersionBuilder {
-                    added_files: vec![],
-                    deleted_files: vec![],
-                },
+                builder: VersionBuilder::new_from_version(&Version::new_empty(Arc::clone(&table_cache))),
             });
             cf_map.insert(USER_COLUMN_FAMILY_ID, Arc::clone(&system_cf));
 
@@ -96,14 +102,12 @@ impl VersionSet {
                 cf_type: CfType::User,
                 name: USER_COLUMN_FAMILY.to_string(),
                 current: Arc::new(Version::new_empty(Arc::clone(&table_cache))),
-                builder: VersionBuilder {
-                    added_files: vec![],
-                    deleted_files: vec![],
-                },
+                builder: VersionBuilder::new_from_version(&Version::new_empty(Arc::clone(&table_cache))),
             });
             cf_map.insert(SYSTEM_COLUMN_FAMILY_ID, Arc::clone(&user_cf));
 
             return Ok(Self {
+                db_config: Arc::new(db_config.clone()),
                 cf_map,
                 next_file_number: AtomicU64::new(1),
                 current_sequence: AtomicU64::new(0),
@@ -118,10 +122,7 @@ impl VersionSet {
         let manifest_path = db_config.manifest_dir.join(manifest_name);
         let mut manifest = ManifestReader::open(manifest_path)?;
 
-        // Prepare an empty version state for replay
-        let mut cf_map: HashMap<u32, Arc<ColumnFamilyData>> = HashMap::new();
-        let mut last_sequence = 0u64;
-        let mut next_file_number = 1u64;
+
 
         manifest.replay(|edit| {
 
@@ -134,10 +135,7 @@ impl VersionSet {
                         cf_type: edit.cf_type,
                         name: edit.cf_name.clone().unwrap_or_else(|| format!("cf_{}", cf_id)),
                         current: Arc::new(Version::new_empty(Arc::clone(&table_cache))),
-                        builder: VersionBuilder {
-                            added_files: vec![],
-                            deleted_files: vec![],
-                        },
+                        builder: VersionBuilder::new_from_version(&Version::new_empty(Arc::clone(&table_cache))),
                     })
                 });
             }
@@ -152,6 +150,7 @@ impl VersionSet {
             let mut ver = (*cfd.current).clone();
             ver.apply_edit(&edit, &table_cache);
             Arc::get_mut(cfd).unwrap().current = Arc::new(ver);
+            Arc::get_mut(cfd).unwrap().builder = VersionBuilder::new_from_version(&cfd.current);
 
             last_sequence =
                 last_sequence.max(edit.last_sequence.unwrap_or(last_sequence));
@@ -166,6 +165,7 @@ impl VersionSet {
         let writer = ManifestWriter::open_existing(manifest_path.to_str().unwrap())?;
 
         Ok(Self {
+            db_config: Arc::new(db_config.clone()),
             cf_map,
             next_file_number: AtomicU64::new(next_file_number),
             current_sequence: AtomicU64::new(0),
@@ -178,7 +178,7 @@ impl VersionSet {
 
     /// Allocate a new SST file number.
     /// This method does not clone any data; it simply increments the internal counter.
-    pub fn new_file_number(&mut self) -> u64 {
+    pub fn new_file_number(&self) -> u64 {
         self.next_file_number.fetch_add(1, Ordering::Relaxed) + 1
     }
 
@@ -323,5 +323,58 @@ impl VersionSet {
         self.log_and_apply(edit)?;
 
         Ok(())
+    }
+
+    pub fn auto_compact(self: &Arc<Mutex<Self>>) {
+        let vs = self.lock().unwrap();
+        let cf_map =vs.cf_map.clone();
+        let db_config = vs.db_config.clone();
+        for cf in cf_map.values() {
+            let cf_clone = Arc::clone(cf);
+            let vs_arc_mutex = Arc::new(Mutex::new(Arc::clone(self)));
+            thread::spawn(move || {
+                let compactor = Compactor::new(
+                    db_config,
+                    Arc::clone(self),
+                    cf_clone,
+                    None);
+                compactor.auto_compact();
+            });
+        }
+    }
+
+    pub fn compact_level(&self, cf_id: u32, level: usize) -> Result<(), String> {
+        let cf = self.cf_map.get(&cf_id).ok_or("Unknown CF")?;
+        let compactor = Compactor::new(Arc::clone(cf), None);
+        compactor.compact_level(level, None, None)
+    }
+}
+
+impl VersionBuilder {
+    pub fn new_from_version(version: &Version) -> Self {
+        let mut levels: [Vec<Arc<FileMetaData>>; NUM_LEVELS] = Default::default();
+
+        for (i, level_files) in version.levels().iter().enumerate() {
+            levels[i] = level_files.clone();
+        }
+
+        VersionBuilder {
+            levels,
+            added_files: Vec::new(),
+            deleted_files: Vec::new(),
+            table_cache: Arc::clone(&version.table_cache()),
+        }
+    }
+
+    pub fn add_file(&mut self, level: usize, file: FileMetaData) {
+        assert!(level < NUM_LEVELS);
+        let arc_file = Arc::new(file.clone());
+        self.levels[level].push(arc_file);
+        self.added_files.push(file);
+    }
+
+    pub fn delete_file(&mut self, file_number: u64, level: usize) {
+        self.levels[level].retain(|f| f.file_number != file_number);
+        self.deleted_files.push(file_number);
     }
 }

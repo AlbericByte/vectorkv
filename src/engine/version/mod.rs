@@ -6,6 +6,7 @@ pub mod manifest;
 pub mod current;
 pub mod manifest_writer;
 pub mod manifest_reader;
+mod compaction;
 
 pub use version_set::VersionSet;
 pub use version::Version;

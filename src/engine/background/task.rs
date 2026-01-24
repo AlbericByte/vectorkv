@@ -1,7 +1,7 @@
 use std::sync::{Arc, Weak, Mutex};
 use std::collections::VecDeque;
 use crate::{DBImpl, DB};
-use crate::engine::mem::MemTable;
+use crate::engine::mem::{ColumnFamilyId, MemTable};
 
 
 pub trait Command: Send + 'static {
@@ -30,6 +30,22 @@ impl Command for FlushMemTableCommand {
                     eprintln!("Flush error: {:?}", e);
                 }
             }
+        }
+    }
+}
+
+pub struct CompactionCommand {
+    db: Weak<DBImpl>,
+    cf: ColumnFamilyId,
+    begin: Option<Vec<u8>>,
+    end: Option<Vec<u8>>,
+}
+
+impl Command for CompactionCommand {
+    fn execute(&self) {
+        if let Some(db) = self.db.upgrade() {
+            // 调用 DBImpl 的 compaction 内部方法
+            let _ = db.run_compaction(self.cf, self.begin.as_deref(), self.end.as_deref());
         }
     }
 }

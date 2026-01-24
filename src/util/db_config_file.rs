@@ -5,7 +5,9 @@ use std::path::{PathBuf};
 use std::sync::Arc;
 use serde::Deserialize;
 use crate::DBError;
+use crate::engine::mem::memtable_set::CfType;
 use crate::engine::sst::block::FilterPolicy;
+use crate::util::Options;
 use crate::util::options::{CompressionType, OpenOptions, OptionsFile};
 
 #[derive(Debug, Deserialize, Default)]
@@ -43,6 +45,8 @@ pub struct DbConfig {
 
     /// Manifest 文件目录
     pub manifest_dir: PathBuf,
+
+    pub options: Arc<Options>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -107,7 +111,8 @@ impl DbConfigFile {
         open.manifest_dir = self.manifest_dir;
 
         if let Some(w) = self.write {
-            open.write = w;
+            let o = &mut open.options;
+            o.write_sync = w.sync;
         }
 
         if let Some(opts) = self.options {
@@ -166,11 +171,13 @@ impl DbConfig {
             .clone()
             .unwrap_or_else(|| db_path.join("manifest"));
 
+        let options = open.to_options();
         Self {
             db_path,
             wal_dir,
             sst_dir,
             manifest_dir,
+            options: Arc::new(options),
         }
     }
 
@@ -228,6 +235,24 @@ impl DbConfig {
     pub fn looks_like_existing_db(&self) -> bool {
         self.current_path().exists()
             && self.manifest_dir.exists()
+    }
+
+    pub fn get_table_options(&self, cf_type: CfType) -> &TableOptions {
+        match cf_type {
+            CfType::System => &self.options.system_cf.table_options,
+            CfType::User => &self.options.user_cf.table_options,
+        }
+    }
+    
+    pub fn get_column_family_options(&self, cf_type: CfType) -> &ColumnFamilyOptions {
+        match cf_type {
+            CfType::System => &self.options.system_cf,
+            CfType::User => &self.options.user_cf,
+        }
+    }
+
+    pub fn get_filter_policy(&self, cf_type: CfType) -> Option<Arc<dyn FilterPolicy + Send + Sync>> {
+        self.get_table_options(cf_type).filter_policy.clone()
     }
 }
 

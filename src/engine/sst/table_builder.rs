@@ -2,9 +2,11 @@
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
 use crate::DBError;
+use crate::engine::mem::InternalKey;
 use crate::engine::sst::block::{BlockBuilder, MetaIndexBlockBuilder, TableProperties, FilterBlockBuilder};
 use crate::engine::sst::format::{BlockHandle, Footer};
 use crate::engine::sst::SstReader;
+use crate::engine::version::FileMetaData;
 use crate::util::{ColumnFamilyOptions, Options};
 
 pub struct TableBuilder<W: Write> {
@@ -23,8 +25,11 @@ pub struct TableBuilder<W: Write> {
     pending_index_handle: Option<BlockHandle>,
     pending_index_key:  Option<Vec<u8>>,
 
-    last_added_key: Vec<u8>,
+    smallest_key: Option<Vec<u8>>,
+    last_added_key: Option<Vec<u8>>,
     last_data_handle: Option<BlockHandle>,
+
+
 
     props: TableProperties,
 }
@@ -62,7 +67,8 @@ impl<W: Write> TableBuilder<W> {
             filter_block,
             pending_index_handle: None,
             pending_index_key: None,
-            last_added_key: Vec::new(),
+            smallest_key: None,
+            last_added_key: None,
             last_data_handle: None,
             props: TableProperties::default(),
         }
@@ -71,8 +77,10 @@ impl<W: Write> TableBuilder<W> {
     /// Add a key-value pair
     pub fn add(&mut self, key: &[u8], value: &[u8]) -> Result<(), DBError> {
         // Check key order
-        if !self.last_added_key.is_empty() && key <= self.last_added_key.as_slice() {
-            return Err(DBError::Other("Keys must be added in order".into()));
+        if let Some(last_key) = &self.last_added_key {
+            if key <= last_key.as_slice() {
+                return Err(DBError::InvalidKeyOrder("Keys must be added in order".into()));
+            }
         }
 
         // Add key to filter block if present
@@ -88,8 +96,16 @@ impl<W: Write> TableBuilder<W> {
             self.flush_data_block(key)?;
         }
 
-        self.last_added_key.clear();
-        self.last_added_key.extend_from_slice(key);
+        if let Some(buf) = &mut self.last_added_key {
+            buf.clear();
+            buf.extend_from_slice(key);
+        } else {
+            self.last_added_key = Some(key.to_vec());
+        }
+
+        if self.smallest_key.is_none() {
+            self.smallest_key = Some(key.to_vec());
+        }
 
         Ok(())
     }
@@ -132,7 +148,7 @@ impl<W: Write> TableBuilder<W> {
     }
 
     /// Finish the SSTable
-    pub fn finish(mut self) -> Result<(), DBError> {
+    pub fn finish(mut self) -> Result<FileMetaData, DBError> {
         // 1️⃣ flush data block
         if !self.data_block.is_empty() {
             let data_bytes = self.data_block.finish();
@@ -206,7 +222,20 @@ impl<W: Write> TableBuilder<W> {
         self.dst.write_all(&footer_bytes)?;
         self.offset += footer_bytes.len() as u64;
 
-        Ok(())
+        let file_size = self.offset;
+        let smallest = self.smallest_key
+            .take()
+            .ok_or(DBError::EmptyTable("smallest key is none".into()))?;
+        let largest = self.last_added_key
+            .take()
+            .ok_or(DBError::EmptyTable("last_added_key key is none".into()))?;
+        Ok(FileMetaData {
+            file_number: self.file_number,
+            file_size: file_size,
+            smallest_key: smallest,
+            largest_key: largest,
+            allowed_seeks: 1 << 30,
+        })
     }
 
     pub fn reset(&mut self) {
@@ -218,7 +247,8 @@ impl<W: Write> TableBuilder<W> {
         }
         self.pending_index_handle = None;
         self.pending_index_key = None;
-        self.last_added_key.clear();
+        self.smallest_key = None;
+        self.last_added_key = None;
         self.last_data_handle = None;
         self.props = TableProperties::default();
         self.offset = 0;
